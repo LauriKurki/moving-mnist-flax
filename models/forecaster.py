@@ -4,42 +4,64 @@ import jax.numpy as jnp
 from typing import List
 from flax import nnx
 
-from layers.conv_lstm import ConvLSTMCell
-
+from layers.layers import ResidualBlock, DownBlock, UpBlock
 
 class Forecaster(nnx.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        forecast_steps: int,
-        hidden_dim: int,
-        rngs: nnx.Rngs
-    ):
-        super().__init__()
-        self.forecast_steps = forecast_steps
-        self.encoder = ConvLSTMCell(input_dim=input_dim, hidden_dim=hidden_dim, rngs=rngs, kernel_size=(3, 3))
-        self.decoder = ConvLSTMCell(input_dim=input_dim, hidden_dim=hidden_dim, rngs=rngs, kernel_size=(3, 3))
-        self.head = nnx.Conv(hidden_dim, out_features=1, kernel_size=(1, 1), rngs=rngs)
+    def __init__(self, input_timesteps, forecast_timesteps, base_channels=32, depth=4, rngs=None):
+        # Encoder
+        self.encoders = []
+        ch = base_channels
+        self.encoders.append(ResidualBlock(input_timesteps, ch, rngs=rngs))
 
-    def __call__(self, x: jnp.ndarray):
-        B, T_in, H, W, channels = x.shape
-        h, c = (
-            jnp.zeros((B, H, W, self.encoder.hidden_dim)),
-            jnp.zeros((B, H, W, self.encoder.hidden_dim))
+        self.down_blocks = []
+        for _ in range(depth - 1):
+            self.down_blocks.append(DownBlock(ch, ch * 2, rngs=rngs))
+            ch *= 2
+        
+        # Bottleneck
+        self.bottleneck = ResidualBlock(ch, ch * 2, rngs=rngs)
+        ch *= 2
+        
+        # Decoder
+        self.up_blocks = []
+        for _ in range(depth - 1):
+            self.up_blocks.append(UpBlock(ch, ch // 2, rngs=rngs))
+            ch //= 2
+        
+        self.final_up = UpBlock(ch, base_channels, rngs=rngs)
+        
+        # Output head
+        self.out_conv = nnx.Conv(
+            in_features=base_channels,
+            out_features=forecast_timesteps,
+            kernel_size=(1, 1),
+            padding="SAME",
+            use_bias=True,
+            rngs=rngs
         )
 
-        # Encode the input sequence using ConvLSTM
-        for t in range(T_in):
-            x_t = x[:, t]
-            h, c = self.encoder(x_t, hidden_state=(h, c))
+    def __call__(self, x):
+        skips = []
+        # First encoder block
+        x = self.encoders[0](x)
+        skips.append(x)
         
-        outputs = []
-        x_t = jnp.zeros((B, H, W, channels))
-        for t in range(self.forecast_steps):
-            h, c = self.decoder(x_t, hidden_state=(h, c))
-            x_t = self.head(h)
-            outputs.append(x_t)
-
-        outputs = jnp.stack(outputs, axis=1)  # Stack along the time dimension
-        outputs = jax.nn.sigmoid(outputs)
-        return outputs
+        # Down path
+        for down in self.down_blocks:
+            x, skip = down(x)
+            skips.append(skip)
+        
+        # Bottleneck
+        x = self.bottleneck(x)
+        
+        # Up path
+        for up in self.up_blocks:
+            skip = skips.pop()
+            x = up(x, skip)
+        
+        # Final up
+        skip = skips.pop()
+        x = self.final_up(x, skip)
+        
+        # Output
+        return self.out_conv(x)

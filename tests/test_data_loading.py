@@ -16,12 +16,13 @@ class TestDataLoading(unittest.TestCase):
         x1, y1 = next(iter(train_dl))
         x2, y2 = next(iter(test_dl))
 
-        bs, seq_len, H, W, ch = x1.shape
+        bs, H, W, seq_len = x1.shape
         print("Train data shape:", x1.shape)
         self.assertEqual(seq_len, 10)
         self.assertEqual(bs, 16)  # Check if batch size is correct
 
-        bs, _, _, seq_len = x2.shape
+        bs, H, W, seq_len = x2.shape
+        print("Test data shape:", x2.shape)
         self.assertEqual(seq_len, 10)
         self.assertEqual(bs, 16)  # Check if batch size is correct
 

@@ -23,12 +23,16 @@ class MovingMNISTDataset(Dataset):
         return self.length
 
     def __getitem__(self, idx):
-        x = self.data[:self.train_seq_length, idx, ..., None]  # (H, W, seq)
-        y = self.data[self.train_seq_length:, idx, ..., None] # (H, W, 1)
+        x = self.data[:self.train_seq_length, idx] / 255.0  # (seq, H, W)
+        x = (x - x.mean()) / (x.std() + 1e-8)  # Normalize to zero mean and unit variance
 
-        # Downsample x and y to (H // 2, W // 2, seq)
-        x = x[:, ::2, ::2]
-        y = y[:, ::2, ::2]
+        y = self.data[self.train_seq_length:, idx] / 255.0  # (seq, H, W)
+        y = (y > 0.5).astype(np.int32)  # Convert to binary mask
+
+        # Move seq dimension to the end
+        x = np.moveaxis(x, 0, -1)  # (H, W, seq)
+        y = np.moveaxis(y, 0, -1)  # (H, W, seq)
+
         return (
             np.array(x, dtype=np.float32),  # Input sequence
             np.array(y, dtype=np.int32)   # Target sequence
